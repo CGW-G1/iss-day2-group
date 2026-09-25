@@ -19,6 +19,23 @@ export interface Todo {
   updated_at: string | null;
 }
 
+export interface User {
+  id: number;
+  username: string;
+  created_at: string;
+}
+
+export interface Authenticator {
+  id: number;
+  user_id: number;
+  credential_id: string;
+  credential_public_key: Buffer;
+  counter: number;
+  created_at: string;
+}
+
+export type ChallengeKind = 'registration' | 'authentication';
+
 export interface CreateTodoInput {
   user_id: number;
   title: string;
@@ -34,15 +51,35 @@ export interface UpdateTodoInput extends Partial<CreateTodoInput> {
   last_notification_sent?: string | null;
 }
 
-const dbPath = path.join(process.cwd(), 'todos.db');
+const dbPath = process.env.DB_PATH ?? path.join(process.cwd(), 'todos.db');
 const db = new Database(dbPath);
 db.pragma('foreign_keys = ON');
 
 const runSchema = `
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT UNIQUE NOT NULL,
+    username TEXT UNIQUE NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS authenticators (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credential_id TEXT UNIQUE NOT NULL,
+    credential_public_key BLOB NOT NULL,
+    counter INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_authenticators_user_id ON authenticators(user_id);
+
+  CREATE TABLE IF NOT EXISTS auth_challenges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    challenge TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    UNIQUE(username, kind)
   );
 
   CREATE TABLE IF NOT EXISTS todos (
@@ -65,6 +102,18 @@ const runSchema = `
 `;
 
 db.exec(runSchema);
+
+const userColumns = db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>;
+const usersHaveEmailColumn = userColumns.some((column) => column.name === 'email');
+const usersHaveUsernameColumn = userColumns.some((column) => column.name === 'username');
+
+if (!usersHaveUsernameColumn && usersHaveEmailColumn) {
+  db.exec(`
+    ALTER TABLE users ADD COLUMN username TEXT;
+    UPDATE users SET username = email WHERE username IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username);
+  `);
+}
 
 const createTodoStmt = db.prepare(`
   INSERT INTO todos (
@@ -144,5 +193,95 @@ export const todoDB = {
     deleteTodoStmt.run({ id });
   },
 };
+
+export const userDB = {
+  findByUsername(username: string): User | null {
+    return (db.prepare('SELECT * FROM users WHERE username = ?').get(username) as User | undefined) ?? null;
+  },
+
+  findById(id: number): User | null {
+    return (db.prepare('SELECT * FROM users WHERE id = ?').get(id) as User | undefined) ?? null;
+  },
+
+  create(username: string): User {
+    const result = usersHaveEmailColumn
+      ? db.prepare('INSERT INTO users (username, email) VALUES (?, ?)').run(username, username)
+      : db.prepare('INSERT INTO users (username) VALUES (?)').run(username);
+    const user = this.findById(Number(result.lastInsertRowid));
+    if (!user) throw new Error('Failed to create user');
+    return user;
+  },
+};
+
+export const authenticatorDB = {
+  findByCredentialId(credentialId: string): Authenticator | null {
+    return (db.prepare('SELECT * FROM authenticators WHERE credential_id = ?').get(credentialId) as Authenticator | undefined) ?? null;
+  },
+
+  findByUserId(userId: number): Authenticator[] {
+    return db.prepare('SELECT * FROM authenticators WHERE user_id = ? ORDER BY id').all(userId) as Authenticator[];
+  },
+
+  create(input: Omit<Authenticator, 'id' | 'created_at'>): Authenticator {
+    const result = db.prepare(`
+      INSERT INTO authenticators (user_id, credential_id, credential_public_key, counter)
+      VALUES (?, ?, ?, ?)
+    `).run(input.user_id, input.credential_id, input.credential_public_key, input.counter ?? 0);
+    return db.prepare('SELECT * FROM authenticators WHERE id = ?').get(Number(result.lastInsertRowid)) as Authenticator;
+  },
+
+  updateCounter(id: number, counter: number): void {
+    db.prepare('UPDATE authenticators SET counter = ? WHERE id = ?').run(counter ?? 0, id);
+  },
+};
+
+export const challengeDB = {
+  save(username: string, kind: ChallengeKind, challenge: string, expiresAt: number): void {
+    db.prepare(`
+      INSERT INTO auth_challenges (username, kind, challenge, expires_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(username, kind) DO UPDATE SET challenge = excluded.challenge, expires_at = excluded.expires_at
+    `).run(username, kind, challenge, expiresAt);
+  },
+
+  get(username: string, kind: ChallengeKind, now = Date.now()): string | null {
+    const record = db.prepare(`
+      SELECT challenge, expires_at
+      FROM auth_challenges
+      WHERE username = ? AND kind = ?
+    `).get(username, kind) as { challenge: string; expires_at: number } | undefined;
+    return record && record.expires_at > now ? record.challenge : null;
+  },
+
+  consumeExpected(username: string, kind: ChallengeKind, expectedChallenge: string, now = Date.now()): boolean {
+    const consume = db.transaction(() => {
+      const result = db.prepare(`
+        DELETE FROM auth_challenges
+        WHERE username = ? AND kind = ? AND challenge = ? AND expires_at > ?
+      `).run(username, kind, expectedChallenge, now);
+      return result.changes === 1;
+    });
+    return consume();
+  },
+  consume(username: string, kind: ChallengeKind, now = Date.now()): string | null {
+    const consume = db.transaction(() => {
+      const record = db.prepare(`
+        SELECT id, challenge, expires_at
+        FROM auth_challenges
+        WHERE username = ? AND kind = ?
+      `).get(username, kind) as { id: number; challenge: string; expires_at: number } | undefined;
+
+      if (!record) return null;
+      db.prepare('DELETE FROM auth_challenges WHERE id = ?').run(record.id);
+      return record.expires_at > now ? record.challenge : null;
+    });
+
+    return consume();
+  },
+};
+
+export function resetDatabaseForTests(): void {
+  db.exec('DELETE FROM auth_challenges; DELETE FROM authenticators; DELETE FROM todos; DELETE FROM users;');
+}
 
 export { db };

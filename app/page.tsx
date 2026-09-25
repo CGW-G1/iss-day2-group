@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Priority, Todo } from '@/lib/db';
 import { sectionTodos, sortTodos } from '@/lib/todoSort';
 
@@ -12,6 +12,25 @@ function App() {
   const [priority, setPriority] = useState<Priority>('medium');
   const [dueDate, setDueDate] = useState('');
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/todos')
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Unable to load todos');
+        return (await response.json()) as Todo[];
+      })
+      .then((loadedTodos) => {
+        if (active) setTodos(loadedTodos);
+      })
+      .catch((loadError: unknown) => {
+        if (active) setError(loadError instanceof Error ? loadError.message : 'Unable to load todos');
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const visible = useMemo(() => {
     const now = new Date();

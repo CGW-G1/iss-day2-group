@@ -35,13 +35,27 @@ export async function PUT(
     return NextResponse.json({ error: 'Todo not found' }, { status: 404 });
   }
 
-  const body = await request.json();
-  if (body.title !== undefined && !String(body.title).trim()) {
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  if (body.title !== undefined && typeof body.title !== 'string') {
+    return NextResponse.json({ error: 'Title must be a string' }, { status: 400 });
+  }
+
+  if (body.title !== undefined && !body.title.trim()) {
     return NextResponse.json({ error: 'Title cannot be empty' }, { status: 400 });
   }
 
+  if (body.due_date !== undefined && body.due_date !== null && typeof body.due_date !== 'string') {
+    return NextResponse.json({ error: 'Invalid due date' }, { status: 400 });
+  }
+
   if (body.due_date !== undefined && body.due_date) {
-    const due = new Date(body.due_date);
+    const due = new Date(body.due_date as string);
     if (Number.isNaN(due.getTime())) {
       return NextResponse.json({ error: 'Invalid due date' }, { status: 400 });
     }

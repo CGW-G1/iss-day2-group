@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
-import { todoDB } from '@/lib/db';
+import { todoDB, type Priority, type RecurrencePattern } from '@/lib/db';
 import { getSingaporeNow } from '@/lib/timezone';
 
 export async function GET() {
@@ -18,14 +18,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
 
-  const body = await request.json();
-  const title = (body.title ?? '').trim();
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  const title = typeof body.title === 'string' ? body.title.trim() : '';
   if (!title) {
     return NextResponse.json({ error: 'Title is required' }, { status: 400 });
   }
 
-  if (body.due_date) {
-    const due = new Date(body.due_date);
+  if (body.due_date !== undefined && body.due_date !== null && typeof body.due_date !== 'string') {
+    return NextResponse.json({ error: 'Invalid due date' }, { status: 400 });
+  }
+
+  const dueDate = body.due_date === null || typeof body.due_date === 'string' ? body.due_date : null;
+  if (dueDate) {
+    const due = new Date(dueDate);
     const minDue = new Date(getSingaporeNow().getTime() + 60_000);
     if (Number.isNaN(due.getTime()) || due < minDue) {
       return NextResponse.json(
@@ -38,11 +49,11 @@ export async function POST(request: NextRequest) {
   const todo = todoDB.create({
     user_id: session.userId,
     title,
-    due_date: body.due_date ?? null,
-    priority: body.priority ?? 'medium',
-    is_recurring: body.is_recurring ?? false,
-    recurrence_pattern: body.recurrence_pattern ?? null,
-    reminder_minutes: body.reminder_minutes ?? null,
+    due_date: dueDate,
+    priority: typeof body.priority === 'string' ? body.priority as Priority : 'medium',
+    is_recurring: typeof body.is_recurring === 'boolean' ? body.is_recurring : false,
+    recurrence_pattern: typeof body.recurrence_pattern === 'string' ? body.recurrence_pattern as RecurrencePattern : null,
+    reminder_minutes: typeof body.reminder_minutes === 'number' ? body.reminder_minutes : null,
   });
 
   return NextResponse.json(todo, { status: 201 });
