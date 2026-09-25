@@ -6,7 +6,7 @@ vi.hoisted(() => {
   process.env.DB_PATH = ':memory:'
 })
 
-import { resetDatabaseForTests, challengeDB } from '@/lib/db'
+import { resetDatabaseForTests } from '@/lib/db'
 import { verifySessionToken } from '@/lib/auth'
 
 function secret() {

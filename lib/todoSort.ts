@@ -6,18 +6,24 @@ export const PRIORITY_ORDER: Record<Priority, number> = {
   low: 2,
 };
 
+export function compareTodos(a: Todo, b: Todo): number {
+  const priorityDiff = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
+  if (priorityDiff !== 0) return priorityDiff;
+
+  if (a.due_date && b.due_date) {
+    const dueDateDiff = new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+    if (dueDateDiff !== 0) return dueDateDiff;
+  } else if (a.due_date && !b.due_date) {
+    return -1;
+  } else if (!a.due_date && b.due_date) {
+    return 1;
+  }
+
+  return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+}
+
 export function sortTodos(todos: Todo[]): Todo[] {
-  return [...todos].sort((a, b) => {
-    if (PRIORITY_ORDER[a.priority] !== PRIORITY_ORDER[b.priority]) {
-      return PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
-    }
-
-    const aDue = a.due_date ? new Date(a.due_date).getTime() : Number.POSITIVE_INFINITY;
-    const bDue = b.due_date ? new Date(b.due_date).getTime() : Number.POSITIVE_INFINITY;
-    if (aDue !== bDue) return aDue - bDue;
-
-    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-  });
+  return [...todos].sort(compareTodos);
 }
 
 export function sectionTodos(todos: Todo[], now: Date): { overdue: Todo[]; pending: Todo[]; completed: Todo[] } {
