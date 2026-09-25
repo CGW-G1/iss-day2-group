@@ -1,0 +1,27 @@
+services:
+  todo-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      RP_NAME: ${RP_NAME:-Todo App}
+      RP_ID: ${RP_ID:?Set RP_ID in .env}
+      RP_ORIGIN: ${RP_ORIGIN:?Set RP_ORIGIN in .env}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      DB_PATH: /data/todos.db
+    volumes:
+      - todo-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  todo-data:
